@@ -1,20 +1,39 @@
-// ui.js - everything that touches the DOM.
+// ui.ts - everything that touches the DOM.
 // Two kinds of functions:
 //   build*  create elements once, when the data has loaded
 //   update* change existing elements (checked, disabled, text) on every
 //           state change. Updating in place, instead of rebuilding, keeps
 //           keyboard focus where it is while the user arrows through radios.
 
-import { STEPS } from "./rules.js";
-import { co2GramsPerKwh } from "./pricing.js";
+import { STEPS, type StepId } from "./rules.ts";
+import { co2GramsPerKwh } from "./pricing.ts";
+import type { Availability, Meta, ProductData, Selections, Totals } from "./types.ts";
 
-const $ = (selector, root = document) => root.querySelector(selector);
+// ---------------------------------------------------------------------------
+// DOM lookup
+// ---------------------------------------------------------------------------
+
+// getElementById can return null. Instead of checking for null everywhere,
+// fail loudly once with a clear message if the HTML and the code disagree.
+// The generic <T> lets callers say which element type they expect:
+//   byId<HTMLButtonElement>("btn-next").disabled = true;
+export function byId<T extends HTMLElement = HTMLElement>(id: string): T {
+  const element = document.getElementById(id);
+  if (!element) throw new Error(`Missing element #${id} in index.html`);
+  return element as T;
+}
 
 // ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
 
-export function createFormatters(meta) {
+export interface Formatters {
+  money(value: number): string;
+  number(value: number): string;
+  extra(value: number): string;
+}
+
+export function createFormatters(meta: Meta): Formatters {
   const money = new Intl.NumberFormat("en-IE", {
     style: "currency",
     currency: meta.currency,
@@ -36,7 +55,12 @@ export function createFormatters(meta) {
 
 // Small createElement wrapper. Text is always set with textContent, never
 // innerHTML, so data from the JSON or URL can't inject HTML.
-function el(tag, props = {}, children = []) {
+// The return type follows the tag: el("input") is an HTMLInputElement.
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Record<string, string> = {},
+  children: (Node | string)[] = []
+): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
     if (key === "text") node.textContent = value;
@@ -51,8 +75,16 @@ function el(tag, props = {}, children = []) {
 // Choice cards
 // ---------------------------------------------------------------------------
 
+interface ChoiceProps {
+  name: string;
+  id: string;
+  title: string;
+  lines?: string[];
+  price: string;
+}
+
 // One radio card. `lines` are extra text lines under the title.
-function buildChoice({ name, id, title, lines = [], price }) {
+function buildChoice({ name, id, title, lines = [], price }: ChoiceProps): HTMLLabelElement {
   const inputId = `${name}-${id}`;
   const input = el("input", { type: "radio", name, value: id, id: inputId });
 
@@ -66,8 +98,8 @@ function buildChoice({ name, id, title, lines = [], price }) {
   return el("label", { class: "choice", for: inputId }, [input, body]);
 }
 
-export function buildEngineChoices(container, data, fmt) {
-  const fuelLabel = (id) => data.fuels.find((f) => f.id === id)?.label ?? id;
+export function buildEngineChoices(container: HTMLElement, data: ProductData, fmt: Formatters): void {
+  const fuelLabel = (id: string) => data.fuels.find((f) => f.id === id)?.label ?? id;
 
   container.replaceChildren(
     ...data.engines.map((engine) =>
@@ -85,7 +117,7 @@ export function buildEngineChoices(container, data, fmt) {
   );
 }
 
-export function buildFuelChoices(container, data, fmt) {
+export function buildFuelChoices(container: HTMLElement, data: ProductData, fmt: Formatters): void {
   container.replaceChildren(
     ...data.fuels.map((fuel) =>
       buildChoice({
@@ -101,11 +133,9 @@ export function buildFuelChoices(container, data, fmt) {
 
 // One <fieldset> per option group, each with its own radio cards.
 // Weight changes and modifiers (e.g. "+8% total weight") come from the JSON.
-export function buildOptionGroups(container, data, fmt) {
-  const modifierLines = (groupId, optionId) =>
-    (data.modifiers ?? [])
-      .filter((m) => m.when.group === groupId && m.when.value === optionId)
-      .map((m) => m.label);
+export function buildOptionGroups(container: HTMLElement, data: ProductData, fmt: Formatters): void {
+  const modifierLines = (groupId: string, optionId: string) =>
+    data.modifiers.filter((m) => m.when.group === groupId && m.when.value === optionId).map((m) => m.label);
 
   container.replaceChildren(
     ...data.optionGroups.map((group) => {
@@ -132,8 +162,8 @@ export function buildOptionGroups(container, data, fmt) {
 
 // Syncs every radio in the form with the state: checked, disabled, and the
 // "why disabled" text, which is linked to the input with aria-describedby.
-export function updateChoices(form, selections, availability) {
-  for (const input of form.querySelectorAll('input[type="radio"]')) {
+export function updateChoices(form: HTMLFormElement, selections: Selections, availability: Availability): void {
+  for (const input of form.querySelectorAll<HTMLInputElement>('input[type="radio"]')) {
     const status = availability[input.name]?.[input.value] ?? { available: true, reason: "" };
     const reason = document.getElementById(`${input.id}-reason`);
 
@@ -144,7 +174,7 @@ export function updateChoices(form, selections, availability) {
       reason.textContent = status.reason;
       reason.hidden = status.available;
     }
-    if (status.available) input.removeAttribute("aria-describedby");
+    if (status.available || !reason) input.removeAttribute("aria-describedby");
     else input.setAttribute("aria-describedby", reason.id);
   }
 }
@@ -153,29 +183,31 @@ export function updateChoices(form, selections, availability) {
 // Steps and progress
 // ---------------------------------------------------------------------------
 
-export function updateSteps(stepIndex) {
+export function updateSteps(stepIndex: number): void {
   STEPS.forEach((step, i) => {
-    $(`#step-${step}`).hidden = i !== stepIndex;
+    byId(`step-${step}`).hidden = i !== stepIndex;
   });
 
-  document.querySelectorAll(".progress__item").forEach((item, i) => {
+  document.querySelectorAll<HTMLElement>(".progress__item").forEach((item, i) => {
     item.classList.toggle("is-complete", i < stepIndex);
     // Colour alone shows "done" on screen; screen readers need words.
-    setText(item.querySelector(".progress__status"), i < stepIndex ? " (completed)" : "");
+    const status = item.querySelector<HTMLElement>(".progress__status");
+    if (status) setText(status, i < stepIndex ? " (completed)" : "");
     if (i === stepIndex) item.setAttribute("aria-current", "step");
     else item.removeAttribute("aria-current");
   });
 
-  const isLast = stepIndex === STEPS.length - 1;
-  $("#btn-back").hidden = stepIndex === 0;
-  $("#btn-next").hidden = isLast;
-  $("#btn-next").textContent = stepIndex === STEPS.length - 2 ? "Review quote" : "Next";
+  const next = byId<HTMLButtonElement>("btn-next");
+  byId("btn-back").hidden = stepIndex === 0;
+  next.hidden = stepIndex === STEPS.length - 1;
+  next.textContent = stepIndex === STEPS.length - 2 ? "Review quote" : "Next";
 }
 
 // Moves focus to the new step's heading, so screen-reader and keyboard
 // users start at the top of the step instead of on a now-hidden button.
-export function focusStepHeading(stepIndex) {
-  $(`#step-${STEPS[stepIndex]}-title`)?.focus();
+export function focusStepHeading(stepIndex: number): void {
+  const step = STEPS[stepIndex];
+  if (step) byId(`step-${step}-title`).focus();
 }
 
 // ---------------------------------------------------------------------------
@@ -184,23 +216,23 @@ export function focusStepHeading(stepIndex) {
 
 // Only touch the DOM when the text really changes. Rewriting the same text
 // inside an aria-live region can make screen readers announce it again.
-function setText(node, text) {
+function setText(node: HTMLElement, text: string): void {
   if (node.textContent !== text) node.textContent = text;
 }
 
 const DASH = "–";
 
-export function updateSummary(totals, fmt) {
-  setText($("#sum-price"), fmt.money(totals.price));
-  setText($("#sum-power"), totals.powerKw === null ? DASH : `${fmt.number(totals.powerKw)} kW`);
-  setText($("#sum-weight"), totals.weightKg === null ? DASH : `${fmt.number(totals.weightKg)} kg`);
+export function updateSummary(totals: Totals, fmt: Formatters): void {
+  setText(byId("sum-price"), fmt.money(totals.price));
+  setText(byId("sum-power"), totals.powerKw === null ? DASH : `${fmt.number(totals.powerKw)} kW`);
+  setText(byId("sum-weight"), totals.weightKg === null ? DASH : `${fmt.number(totals.weightKg)} kg`);
   setText(
-    $("#sum-co2"),
+    byId("sum-co2"),
     totals.co2TonnesPerYear === null ? "Choose engine and fuel" : `≈ ${fmt.number(totals.co2TonnesPerYear)} t`
   );
 
   // e.g. "incl. +375 kg: Noise enclosure adds 8% to total weight"
-  const detail = $("#sum-weight-detail");
+  const detail = byId("sum-weight-detail");
   const adjustmentText = totals.adjustments
     .map((a) => `incl. +${fmt.number(a.weightKg)} kg: ${a.label}`)
     .join(" ");
@@ -216,12 +248,12 @@ export function updateSummary(totals, fmt) {
             el("span", { class: "summary__item-price", text: fmt.money(line.price) }),
           ])
         );
-  $("#summary-items").replaceChildren(...items);
+  byId("summary-items").replaceChildren(...items);
 }
 
 // The table on step 4: one row per selection, then the totals.
-export function updateReview(totals, fmt) {
-  const row = (term, value, price = "", modifier = "") => [
+export function updateReview(totals: Totals, fmt: Formatters): void {
+  const row = (term: string, value: string, price = "", modifier = ""): HTMLElement[] => [
     el("dt", { class: modifier, text: term }),
     el("dd", { class: modifier }, [
       el("span", { text: value }),
@@ -237,20 +269,20 @@ export function updateReview(totals, fmt) {
   }
   rows.push(...row("Total price", "", fmt.money(totals.price), "review-list__total"));
 
-  $("#review-list").replaceChildren(...rows);
+  byId("review-list").replaceChildren(...rows);
 }
 
 // Text that comes from products.json but never changes while the page is open.
-export function setStaticText(data, fmt) {
+export function setStaticText(data: ProductData, fmt: Formatters): void {
   const { annualRunningHours, averageLoadFactor } = data.assumptions;
   const note =
     `CO2 estimate assumes ${fmt.number(annualRunningHours)} running hours per year ` +
     `at ${Math.round(averageLoadFactor * 100)}% average load.`;
 
-  $("#summary-note").textContent = note;
-  $("#review-note").textContent = note;
-  $("#disclaimer").textContent = data.meta.disclaimer;
-  $("#print-company").textContent = data.meta.company;
+  byId("summary-note").textContent = note;
+  byId("review-note").textContent = note;
+  byId("disclaimer").textContent = data.meta.disclaimer;
+  byId("print-company").textContent = data.meta.company;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +290,7 @@ export function setStaticText(data, fmt) {
 // ---------------------------------------------------------------------------
 
 // Creates a file in memory (Blob) and clicks a temporary download link.
-export function downloadFile(filename, text, type) {
+export function downloadFile(filename: string, text: string, type: string): void {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const link = el("a", { href: url, download: filename });
   document.body.append(link);
@@ -271,7 +303,7 @@ export function downloadFile(filename, text, type) {
 
 // The Clipboard API only works on https or localhost and can be refused by
 // the user, so failure is expected and handled by the caller.
-export async function copyToClipboard(text) {
+export async function copyToClipboard(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
     return true;
@@ -281,25 +313,25 @@ export async function copyToClipboard(text) {
   }
 }
 
-export function setPrintLink(url) {
-  setText($("#print-link"), url);
+export function setPrintLink(url: string): void {
+  setText(byId("print-link"), url);
 }
 
-export function setPrintDate(date) {
-  $("#print-date").textContent = date.toLocaleDateString("en-IE", { dateStyle: "long" });
+export function setPrintDate(date: Date): void {
+  byId("print-date").textContent = date.toLocaleDateString("en-IE", { dateStyle: "long" });
 }
 
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 
-export function showStepError(step, message) {
-  $(`#${step}-error`).textContent = message;
+export function showStepError(step: StepId, message: string): void {
+  byId(`${step}-error`).textContent = message;
 }
 
-export function clearStepErrors() {
+export function clearStepErrors(): void {
   for (const step of STEPS) {
-    const box = $(`#${step}-error`);
+    const box = document.getElementById(`${step}-error`); // the summary step has none
     if (box) box.textContent = "";
   }
   markMissingGroups([]);
@@ -307,32 +339,32 @@ export function clearStepErrors() {
 
 // Highlights the option groups that still need a choice, so the user can
 // see them without scrolling down to the error message.
-export function markMissingGroups(groups) {
-  for (const fieldset of document.querySelectorAll(".option-group")) {
-    fieldset.classList.toggle("is-missing", groups.includes(fieldset.dataset.group));
+export function markMissingGroups(groups: readonly string[]): void {
+  for (const fieldset of document.querySelectorAll<HTMLFieldSetElement>(".option-group")) {
+    fieldset.classList.toggle("is-missing", groups.includes(fieldset.dataset.group ?? ""));
   }
 }
 
-export function hasMissingGroups() {
+export function hasMissingGroups(): boolean {
   return document.querySelector(".option-group.is-missing") !== null;
 }
 
 // Puts focus on the first selectable radio of a group, used after a
 // validation error so the user lands right where the fix is needed.
-export function focusGroup(form, group) {
-  form.querySelector(`input[name="${group}"]:not(:disabled)`)?.focus();
+export function focusGroup(form: HTMLFormElement, group: string): void {
+  form.querySelector<HTMLInputElement>(`input[name="${group}"]:not(:disabled)`)?.focus();
 }
 
-export function showNotice(messages) {
-  $("#notice").textContent = messages.join(" ");
+export function showNotice(messages: readonly string[]): void {
+  byId("notice").textContent = messages.join(" ");
 }
 
-export function clearNotice() {
-  $("#notice").textContent = "";
+export function clearNotice(): void {
+  byId("notice").textContent = "";
 }
 
-export function showLoadError(message) {
+export function showLoadError(message: string): void {
   const box = el("p", { class: "load-error", role: "alert", text: message });
-  $("#engine-choices").replaceChildren(box);
-  $("#btn-next").disabled = true;
+  byId("engine-choices").replaceChildren(box);
+  byId<HTMLButtonElement>("btn-next").disabled = true;
 }

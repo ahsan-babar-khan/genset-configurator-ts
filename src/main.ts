@@ -1,4 +1,4 @@
-// main.js - entry point. Loads the product data, creates the state, and
+// main.ts - entry point. Loads the product data, creates the state, and
 // connects user events -> rules -> state -> UI. Contains no product
 // knowledge itself: every option, price and rule comes from products.json.
 
@@ -9,7 +9,7 @@ import {
   saveConfiguration,
   loadConfiguration,
   clearSavedConfiguration,
-} from "./state.js";
+} from "./state.ts";
 import {
   STEPS,
   getAllGroups,
@@ -20,34 +20,46 @@ import {
   validateStep,
   firstIncompleteStep,
   checkDataIntegrity,
-} from "./rules.js";
-import { calculateTotals, buildQuote } from "./pricing.js";
-import * as ui from "./ui.js";
+} from "./rules.ts";
+import { calculateTotals, buildQuote } from "./pricing.ts";
+import * as ui from "./ui.ts";
+import type { ProductData, Reset, Selections } from "./types.ts";
 
 const DATA_URL = "data/products.json";
 
-async function loadData() {
+// response.json() returns `any`. The cast below tells TypeScript to trust
+// that the file matches ProductData; it does NOT check it at runtime.
+// That's why checkDataIntegrity() still runs after loading, and why the
+// data tests check products.json before every deploy.
+async function loadData(): Promise<ProductData> {
   const response = await fetch(DATA_URL);
   if (!response.ok) throw new Error(`HTTP ${response.status} while loading ${DATA_URL}`);
-  return response.json();
+  return (await response.json()) as ProductData;
 }
 
 // "2026-10-20" in the user's own time zone. (toISOString() would give the
 // UTC date, which is the wrong day for part of the day outside UTC.)
-function localDateStamp(date) {
-  const pad = (n) => String(n).padStart(2, "0");
+function localDateStamp(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+interface Restored {
+  selections: Selections;
+  step: number;
+  source: "link" | "saved" | null;
+  resets: Reset[];
 }
 
 // Where to start: a shared link wins over a saved configuration, so opening
 // someone's link always shows their setup. Whatever the source, the values
 // are cleaned, because a URL or old save may contain invalid or deleted ids.
-function restoreConfiguration(data) {
+function restoreConfiguration(data: ProductData): Restored {
   const groups = getAllGroups(data);
   const fromUrl = selectionsFromQuery(window.location.search, groups);
 
-  let source = null;
-  let raw = {};
+  let source: Restored["source"] = null;
+  let raw: Selections = {};
   if (Object.keys(fromUrl).length > 0) {
     source = "link";
     raw = fromUrl;
@@ -68,8 +80,8 @@ function restoreConfiguration(data) {
   return { selections, step, source, resets };
 }
 
-async function init() {
-  let data;
+async function init(): Promise<void> {
+  let data: ProductData;
   try {
     data = await loadData();
   } catch (error) {
@@ -84,29 +96,29 @@ async function init() {
   // Warn (don't crash) if someone made a typo while editing the JSON.
   for (const problem of checkDataIntegrity(data)) console.warn("[products.json]", problem);
 
-  const form = document.getElementById("config-form");
+  const form = ui.byId<HTMLFormElement>("config-form");
+
   const groups = getAllGroups(data);
   const fmt = ui.createFormatters(data.meta);
 
   const restored = restoreConfiguration(data);
   const state = createState({ selections: restored.selections, step: restored.step });
 
-  ui.buildEngineChoices(document.getElementById("engine-choices"), data, fmt);
-  ui.buildFuelChoices(document.getElementById("fuel-choices"), data, fmt);
-  ui.buildOptionGroups(document.getElementById("option-groups"), data, fmt);
+  ui.buildEngineChoices(ui.byId("engine-choices"), data, fmt);
+  ui.buildFuelChoices(ui.byId("fuel-choices"), data, fmt);
+  ui.buildOptionGroups(ui.byId("option-groups"), data, fmt);
   ui.setStaticText(data, fmt);
 
   // The full shareable link for the current configuration.
-  function shareUrl() {
-    const query = selectionsToQuery(state.getSelections(), groups);
+  function shareUrl(): string {
     const url = new URL(window.location.href);
-    url.search = query;
+    url.search = selectionsToQuery(state.getSelections(), groups);
     url.hash = "";
     return url.toString();
   }
 
   // Re-render from state on every change.
-  function render() {
+  function render(): void {
     const selections = state.getSelections();
     const totals = calculateTotals(data, selections);
     ui.updateChoices(form, selections, getAvailability(data, selections));
@@ -118,9 +130,8 @@ async function init() {
 
   // Keep localStorage and the address bar in sync with the state.
   // replaceState (not pushState) so every click doesn't add a Back-button entry.
-  function persist() {
-    const selections = state.getSelections();
-    saveConfiguration(selections, data.meta.dataVersion);
+  function persist(): void {
+    saveConfiguration(state.getSelections(), data.meta.dataVersion);
     window.history.replaceState(null, "", shareUrl());
   }
 
@@ -129,7 +140,9 @@ async function init() {
   // One listener for the whole form (event delegation) instead of one per radio.
   form.addEventListener("change", (event) => {
     const input = event.target;
-    if (input.type !== "radio") return;
+    // event.target is typed as EventTarget | null. The instanceof check
+    // narrows it to HTMLInputElement, so .name and .value are safe to use.
+    if (!(input instanceof HTMLInputElement) || input.type !== "radio") return;
 
     const { selections, resets } = applySelection(data, state.getSelections(), input.name, input.value);
     state.setSelections(selections);
@@ -143,33 +156,36 @@ async function init() {
     else ui.clearNotice();
   });
 
-  function goToStep(index) {
+  function goToStep(index: number): void {
     ui.clearStepErrors();
     ui.clearNotice();
     state.setStep(index);
     ui.focusStepHeading(index);
   }
 
-  document.getElementById("btn-next").addEventListener("click", () => {
-    const step = state.getStep();
-    const result = validateStep(data, state.getSelections(), STEPS[step]);
+  ui.byId("btn-next").addEventListener("click", () => {
+    const index = state.getStep();
+    const step = STEPS[index];
+    if (!step) return;
+    const result = validateStep(data, state.getSelections(), step);
 
     if (!result.valid) {
-      ui.showStepError(STEPS[step], result.message);
+      ui.showStepError(step, result.message);
       ui.markMissingGroups(result.missing);
-      ui.focusGroup(form, result.missing[0]);
+      const firstMissing = result.missing[0];
+      if (firstMissing) ui.focusGroup(form, firstMissing);
       return;
     }
-    goToStep(step + 1);
+    goToStep(index + 1);
   });
 
-  document.getElementById("btn-back").addEventListener("click", () => {
+  ui.byId("btn-back").addEventListener("click", () => {
     goToStep(Math.max(0, state.getStep() - 1));
   });
 
   // Quote actions need a complete configuration. The summary step can only
   // be reached when complete, but a check here keeps them safe regardless.
-  function ensureComplete() {
+  function ensureComplete(): boolean {
     const incomplete = firstIncompleteStep(data, state.getSelections());
     if (incomplete === -1) return true;
     goToStep(incomplete);
@@ -177,7 +193,7 @@ async function init() {
     return false;
   }
 
-  document.getElementById("btn-download").addEventListener("click", () => {
+  ui.byId("btn-download").addEventListener("click", () => {
     if (!ensureComplete()) return;
     const now = new Date();
     const quote = buildQuote(data, state.getSelections(), { date: now, shareUrl: shareUrl() });
@@ -186,18 +202,18 @@ async function init() {
     ui.showNotice([`Quote downloaded as ${filename}.`]);
   });
 
-  document.getElementById("btn-print").addEventListener("click", () => {
+  ui.byId("btn-print").addEventListener("click", () => {
     if (!ensureComplete()) return;
     window.print();
   });
 
-  document.getElementById("btn-share").addEventListener("click", async () => {
+  ui.byId("btn-share").addEventListener("click", async () => {
     const url = shareUrl();
     const copied = await ui.copyToClipboard(url);
     ui.showNotice([copied ? "Link copied to clipboard." : `Copy this link to share your configuration: ${url}`]);
   });
 
-  document.getElementById("btn-reset").addEventListener("click", () => {
+  ui.byId("btn-reset").addEventListener("click", () => {
     if (!window.confirm("Start over? Your current configuration will be cleared.")) return;
     clearSavedConfiguration();
     state.reset();

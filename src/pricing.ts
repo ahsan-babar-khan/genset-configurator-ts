@@ -1,18 +1,29 @@
-// pricing.js - totals for price, power, weight and CO2.
+// pricing.ts - totals for price, power, weight and CO2.
 // Pure functions only (no DOM), so they can be tested in Node.
 // Every number comes from products.json; nothing is hard-coded here.
 
-import { findItem, getAllGroups, getGroupLabel, getItemLabel } from "./rules.js";
+import { findItem, getAllGroups, getGroupLabel, getItemLabel } from "./rules.ts";
+import type {
+  Assumptions,
+  Engine,
+  Fuel,
+  Line,
+  ProductData,
+  Quote,
+  Selections,
+  Totals,
+  WeightAdjustment,
+} from "./types.ts";
 
 // g of CO2 per kWh produced, for one fuel.
 // (fuel used per kWh) x (CO2 released per tonne of fuel burnt)
-export function co2GramsPerKwh(fuel) {
+export function co2GramsPerKwh(fuel: Fuel): number {
   return fuel.fuelConsumptionGPerKwh * fuel.co2FactorTPerTFuel;
 }
 
 // Estimated tonnes of CO2 per year for an engine running on a fuel,
 // using the running hours and load factor from data.assumptions.
-export function annualCo2Tonnes(engine, fuel, assumptions) {
+export function annualCo2Tonnes(engine: Engine, fuel: Fuel, assumptions: Assumptions): number {
   const kWhPerYear = engine.powerKw * assumptions.averageLoadFactor * assumptions.annualRunningHours;
   return (kWhPerYear * co2GramsPerKwh(fuel)) / 1_000_000; // grams -> tonnes
 }
@@ -20,8 +31,12 @@ export function annualCo2Tonnes(engine, fuel, assumptions) {
 // Weight added by modifiers such as "noise enclosure adds 8%".
 // Each percentage is applied to the weight BEFORE modifiers, so two
 // modifiers of 5% add 10%, not 10.25%. Simple and easy to explain to a customer.
-export function weightAdjustments(data, selections, baseWeightKg) {
-  return (data.modifiers ?? [])
+export function weightAdjustments(
+  data: ProductData,
+  selections: Selections,
+  baseWeightKg: number
+): WeightAdjustment[] {
+  return data.modifiers
     .filter((m) => selections[m.when.group] === m.when.value && m.effect.type === "weightPercent")
     .map((m) => ({
       id: m.id,
@@ -32,8 +47,8 @@ export function weightAdjustments(data, selections, baseWeightKg) {
 
 // The main function: everything the summary panel and quote need.
 // Works for partial configurations too (missing groups are just skipped).
-export function calculateTotals(data, selections) {
-  const lines = [];
+export function calculateTotals(data: ProductData, selections: Selections): Totals {
+  const lines: Line[] = [];
 
   for (const group of getAllGroups(data)) {
     const item = findItem(data, group, selections[group]);
@@ -43,7 +58,8 @@ export function calculateTotals(data, selections) {
       groupLabel: getGroupLabel(data, group),
       id: item.id,
       label: getItemLabel(data, group, item.id),
-      price: group === "engine" ? item.basePrice : item.price ?? 0,
+      // Engines have a basePrice, everything else a price.
+      price: "basePrice" in item ? item.basePrice : item.price,
       weightKg: item.weightKg ?? 0,
     });
   }
@@ -53,8 +69,8 @@ export function calculateTotals(data, selections) {
   const adjustments = weightAdjustments(data, selections, baseWeightKg);
   const weightKg = baseWeightKg + adjustments.reduce((sum, a) => sum + a.weightKg, 0);
 
-  const engine = findItem(data, "engine", selections.engine);
-  const fuel = findItem(data, "fuel", selections.fuel);
+  const engine = data.engines.find((e) => e.id === selections.engine);
+  const fuel = data.fuels.find((f) => f.id === selections.fuel);
 
   return {
     currency: data.meta.currency,
@@ -70,7 +86,11 @@ export function calculateTotals(data, selections) {
 
 // The downloadable quote. Pure: the date and share link are passed in,
 // so the same inputs always give the same quote (easy to test).
-export function buildQuote(data, selections, { date, shareUrl }) {
+export function buildQuote(
+  data: ProductData,
+  selections: Selections,
+  { date, shareUrl }: { date: Date; shareUrl: string }
+): Quote {
   const totals = calculateTotals(data, selections);
   return {
     company: data.meta.company,

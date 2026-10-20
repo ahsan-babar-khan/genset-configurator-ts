@@ -1,44 +1,63 @@
-// rules.js - compatibility and validation logic.
+// rules.ts - compatibility and validation logic.
 // Pure functions only: they take product data and selections and return
 // new values. No DOM access, so they can be tested in Node.
 //
 // "selections" is a flat object keyed by group id, e.g.
 //   { engine: "nw-m500", fuel: "lng", cooling: "radiator" }
-// A group with no choice yet is missing or null.
+// A group with no choice yet is simply missing.
+
+import type {
+  Availability,
+  ItemStatus,
+  ProductData,
+  Reset,
+  SanitizeResult,
+  SelectableItem,
+  Selections,
+  ValidationResult,
+} from "./types.ts";
 
 // The order of the steps in the form. This is app structure, not product data.
-export const STEPS = ["engine", "fuel", "options", "summary"];
+// `as const` makes the array read-only and keeps the exact strings as types.
+export const STEPS = ["engine", "fuel", "options", "summary"] as const;
 
-const AVAILABLE = Object.freeze({ available: true, reason: "" });
+// Derived from the array: "engine" | "fuel" | "options" | "summary".
+// Adding a step to STEPS updates this type automatically.
+export type StepId = (typeof STEPS)[number];
+
+const AVAILABLE: ItemStatus = Object.freeze({ available: true, reason: "" });
 
 // ---------------------------------------------------------------------------
 // Lookups
 // ---------------------------------------------------------------------------
 
 // Every selection group, in display order: engine, fuel, then option groups.
-export function getAllGroups(data) {
+export function getAllGroups(data: ProductData): string[] {
   return ["engine", "fuel", ...data.optionGroups.map((g) => g.id)];
 }
 
 // All selectable items of a group, whatever kind of group it is.
-export function getGroupItems(data, group) {
+export function getGroupItems(data: ProductData, group: string): readonly SelectableItem[] {
   if (group === "engine") return data.engines;
   if (group === "fuel") return data.fuels;
   const optionGroup = data.optionGroups.find((g) => g.id === group);
   return optionGroup ? optionGroup.options : [];
 }
 
-export function findItem(data, group, id) {
+export function findItem(data: ProductData, group: string, id: string | undefined): SelectableItem | null {
+  if (id === undefined) return null;
   return getGroupItems(data, group).find((item) => item.id === id) ?? null;
 }
 
 // Engines have a "name", everything else has a "label".
-export function getItemLabel(data, group, id) {
+// The `in` check narrows the union type, so each branch is type-safe.
+export function getItemLabel(data: ProductData, group: string, id: string): string {
   const item = findItem(data, group, id);
-  return item ? item.name ?? item.label : id;
+  if (!item) return id;
+  return "name" in item ? item.name : item.label;
 }
 
-export function getGroupLabel(data, group) {
+export function getGroupLabel(data: ProductData, group: string): string {
   if (group === "engine") return "Engine";
   if (group === "fuel") return "Fuel";
   const optionGroup = data.optionGroups.find((g) => g.id === group);
@@ -46,11 +65,17 @@ export function getGroupLabel(data, group) {
 }
 
 // Which selection groups each step is responsible for.
-export function getStepGroups(data, step) {
-  if (step === "engine") return ["engine"];
-  if (step === "fuel") return ["fuel"];
-  if (step === "options") return data.optionGroups.filter((g) => g.required).map((g) => g.id);
-  return [];
+export function getStepGroups(data: ProductData, step: StepId): string[] {
+  switch (step) {
+    case "engine":
+      return ["engine"];
+    case "fuel":
+      return ["fuel"];
+    case "options":
+      return data.optionGroups.filter((g) => g.required).map((g) => g.id);
+    case "summary":
+      return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -60,14 +85,14 @@ export function getStepGroups(data, step) {
 // Works out, for every item in every group, whether it can be chosen with
 // the current selections, and if not, why. Shape of the result:
 //   { fuel: { lng: { available: false, reason: "Not supported by ..." } } }
-export function getAvailability(data, selections) {
-  const engine = findItem(data, "engine", selections.engine);
-  const availability = {};
+export function getAvailability(data: ProductData, selections: Selections): Availability {
+  const engine = data.engines.find((e) => e.id === selections.engine);
+  const availability: Availability = {};
 
   availability.engine = Object.fromEntries(data.engines.map((e) => [e.id, AVAILABLE]));
 
   availability.fuel = Object.fromEntries(
-    data.fuels.map((fuel) => {
+    data.fuels.map((fuel): [string, ItemStatus] => {
       if (engine && !engine.supportedFuels.includes(fuel.id)) {
         return [fuel.id, { available: false, reason: `Not supported by the ${engine.name}.` }];
       }
@@ -89,43 +114,45 @@ export function getAvailability(data, selections) {
 //
 //   excludes: if X is selected, the "then" item is disabled
 //   requires: if X is selected, every OTHER item in the "then" group is disabled
-function applyRules(data, selections, availability) {
-  for (const rule of data.rules ?? []) {
+function applyRules(data: ProductData, selections: Selections, availability: Availability): void {
+  for (const rule of data.rules) {
     if (selections[rule.if.group] !== rule.if.value) continue; // rule not triggered
 
     const targetGroup = availability[rule.then.group];
     if (!targetGroup) continue;
 
-    let blockedIds;
+    let blockedIds: string[];
     if (rule.type === "excludes") {
       blockedIds = [rule.then.value];
     } else if (rule.type === "requires") {
       blockedIds = Object.keys(targetGroup).filter((id) => id !== rule.then.value);
     } else {
-      continue; // unknown type: reported by checkDataIntegrity()
+      // The types say this can't happen, but products.json is loaded at
+      // runtime and could contain anything. checkDataIntegrity() reports it.
+      continue;
     }
 
     for (const id of blockedIds) {
-      if (targetGroup[id]) targetGroup[id] = disable(targetGroup[id], rule.message);
+      const status = targetGroup[id];
+      if (status) targetGroup[id] = disable(status, rule.message);
     }
   }
 }
 
 // Marks an item unavailable. If several rules block the same item, all
 // their reasons are kept.
-function disable(status, reason) {
+function disable(status: ItemStatus, reason: string): ItemStatus {
   if (status.available) return { available: false, reason };
   if (status.reason.includes(reason)) return status;
   return { available: false, reason: `${status.reason} ${reason}` };
 }
 
 // Selections that are no longer allowed (or no longer exist in the data).
-export function findInvalidSelections(data, selections) {
+export function findInvalidSelections(data: ProductData, selections: Selections): Reset[] {
   const availability = getAvailability(data, selections);
-  const invalid = [];
+  const invalid: Reset[] = [];
 
   for (const [group, value] of Object.entries(selections)) {
-    if (value == null) continue;
     const status = availability[group]?.[value];
     if (!status) {
       invalid.push({ group, value, reason: "This choice is no longer offered." });
@@ -140,21 +167,26 @@ export function findInvalidSelections(data, selections) {
 // what was removed, so the UI can tell the user.
 // One pass is enough: removing a choice can only lift restrictions, never
 // create new ones, because rules only trigger on things that are selected.
-export function sanitizeSelections(data, selections) {
+export function sanitizeSelections(data: ProductData, selections: Selections): SanitizeResult {
   const resets = findInvalidSelections(data, selections);
-  const cleaned = { ...selections };
+  const cleaned: Selections = { ...selections };
   for (const { group } of resets) delete cleaned[group];
   return { selections: cleaned, resets };
 }
 
 // Applies one user choice and resolves any knock-on effects.
-export function applySelection(data, selections, group, value) {
+export function applySelection(
+  data: ProductData,
+  selections: Selections,
+  group: string,
+  value: string
+): SanitizeResult {
   return sanitizeSelections(data, { ...selections, [group]: value });
 }
 
 // Human-readable text for a reset, e.g.
 //   'Fuel "LNG" was cleared: Not supported by the NW-M250 Compact.'
-export function describeReset(data, { group, value, reason }) {
+export function describeReset(data: ProductData, { group, value, reason }: Reset): string {
   return `${getGroupLabel(data, group)} "${getItemLabel(data, group, value)}" was cleared: ${reason}`;
 }
 
@@ -163,11 +195,11 @@ export function describeReset(data, { group, value, reason }) {
 // ---------------------------------------------------------------------------
 
 // Checks that every required group of a step has a choice.
-export function validateStep(data, selections, step) {
+export function validateStep(data: ProductData, selections: Selections, step: StepId): ValidationResult {
   const missing = getStepGroups(data, step).filter((group) => !selections[group]);
   if (missing.length === 0) return { valid: true, missing, message: "" };
 
-  let message;
+  let message: string;
   if (step === "engine") message = "Please choose an engine to continue.";
   else if (step === "fuel") message = "Please choose a fuel type to continue.";
   else message = `Please make a choice for: ${missing.map((g) => getGroupLabel(data, g)).join(", ")}.`;
@@ -176,7 +208,7 @@ export function validateStep(data, selections, step) {
 }
 
 // The first step that still has missing choices, or -1 if all are complete.
-export function firstIncompleteStep(data, selections) {
+export function firstIncompleteStep(data: ProductData, selections: Selections): number {
   return STEPS.findIndex((step) => !validateStep(data, selections, step).valid);
 }
 
@@ -185,18 +217,20 @@ export function firstIncompleteStep(data, selections) {
 // ---------------------------------------------------------------------------
 
 // Catches typos in products.json, e.g. a rule pointing at an option id that
-// doesn't exist. Returns a list of problems (empty when the data is fine).
-export function checkDataIntegrity(data) {
-  const problems = [];
-  const exists = (group, id) => findItem(data, group, id) !== null;
+// doesn't exist. Types can't do this: they check code at compile time, but
+// the JSON is loaded at runtime. Returns a list of problems (empty = fine).
+export function checkDataIntegrity(data: ProductData): string[] {
+  const problems: string[] = [];
+  const exists = (group: string, id: string) => findItem(data, group, id) !== null;
+  const ruleTypes: readonly string[] = ["excludes", "requires"];
 
   for (const engine of data.engines) {
     for (const fuel of engine.supportedFuels) {
       if (!exists("fuel", fuel)) problems.push(`Engine "${engine.id}" lists unknown fuel "${fuel}".`);
     }
   }
-  for (const rule of data.rules ?? []) {
-    if (!["excludes", "requires"].includes(rule.type)) {
+  for (const rule of data.rules) {
+    if (!ruleTypes.includes(rule.type)) {
       problems.push(`Rule "${rule.id}" has unknown type "${rule.type}".`);
     }
     for (const cond of [rule.if, rule.then]) {
@@ -205,7 +239,7 @@ export function checkDataIntegrity(data) {
       }
     }
   }
-  for (const mod of data.modifiers ?? []) {
+  for (const mod of data.modifiers) {
     if (!exists(mod.when.group, mod.when.value)) {
       problems.push(`Modifier "${mod.id}" refers to unknown ${mod.when.group} "${mod.when.value}".`);
     }

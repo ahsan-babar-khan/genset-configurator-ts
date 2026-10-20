@@ -7,8 +7,25 @@
   <title>GenSet Configurator | NordWave Power</title>
   <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/print.css" media="print">
-  <!-- type="module" enables import/export and defers running until the HTML is parsed -->
-  <script type="module" src="js/main.js"></script>
+  <script>
+    // Runs if dist/main.js can't be loaded, which usually means the
+    // TypeScript hasn't been compiled yet. (On file:// the message in the
+    // body explains the real problem instead.)
+    function showBuildMissing() {
+      if (location.protocol === "file:") return;
+      var box = document.getElementById("engine-choices");
+      if (!box) return document.addEventListener("DOMContentLoaded", showBuildMissing);
+      var message = document.createElement("p");
+      message.className = "load-error";
+      message.setAttribute("role", "alert");
+      message.textContent = "The app hasn't been built yet. Run npm install and npm run build, then reload.";
+      box.replaceChildren(message);
+      document.getElementById("btn-next").disabled = true;
+    }
+  </script>
+  <!-- Compiled from src/main.ts by `npm run build`. type="module" enables
+       import/export and defers running until the HTML is parsed. -->
+  <script type="module" src="dist/main.js" onerror="showBuildMissing()"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to configurator</a>
