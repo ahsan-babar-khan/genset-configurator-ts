@@ -1,6 +1,7 @@
-# Runs the tests on every push and pull request.
-# On the main branch, deploys the site to GitHub Pages, but only if the tests pass.
-name: Test and deploy
+# On every push and pull request: type-check, test and build.
+# On the main branch, deploy the built site to GitHub Pages, but only if
+# all of that passed.
+name: Check and deploy
 
 on:
   push:
@@ -12,17 +13,31 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
       - run: npm test
+      - run: npm run build
+
+      # Only the files the website needs; no node_modules, sources or tests.
+      - name: Assemble site
+        run: |
+          mkdir _site
+          cp -r index.html css data dist _site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
 
   deploy:
-    needs: test
+    needs: check
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -32,10 +47,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
       - id: deployment
         uses: actions/deploy-pages@v4
