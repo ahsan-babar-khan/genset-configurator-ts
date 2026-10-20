@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { calculateTotals, co2GramsPerKwh, annualCo2Tonnes, buildQuote } from "../js/pricing.js";
-import { loadData, FULL_CONFIG } from "./helpers.js";
+import { calculateTotals, co2GramsPerKwh, annualCo2Tonnes, buildQuote } from "../src/pricing.ts";
+import { loadData, FULL_CONFIG, must } from "./helpers.ts";
 
 const data = loadData();
 
@@ -14,7 +14,7 @@ test("noise enclosure adds 8% to the weight", () => {
   const totals = calculateTotals(data, FULL_CONFIG);
   // 4,100 + 450 + 120 + 15 = 4,685 kg, +8% = 375 kg
   assert.equal(totals.baseWeightKg, 4685);
-  assert.equal(totals.adjustments[0].weightKg, 375);
+  assert.equal(must(totals.adjustments[0], "enclosure adjustment").weightKg, 375);
   assert.equal(totals.weightKg, 5060);
 
   const noEnclosure = calculateTotals(data, { ...FULL_CONFIG, enclosure: "no" });
@@ -22,8 +22,8 @@ test("noise enclosure adds 8% to the weight", () => {
 });
 
 test("CO2 estimate uses consumption, CO2 factor and the assumptions", () => {
-  const lng = data.fuels.find((f) => f.id === "lng");
-  const m500 = data.engines.find((e) => e.id === "nw-m500");
+  const lng = must(data.fuels.find((f) => f.id === "lng"), "LNG fuel");
+  const m500 = must(data.engines.find((e) => e.id === "nw-m500"), "NW-M500 engine");
   assert.equal(co2GramsPerKwh(lng), 440); // 160 g/kWh x 2.75
   // 500 kW x 0.75 x 4,000 h x 440 g = 660 t
   assert.equal(annualCo2Tonnes(m500, lng, data.assumptions), 660);
@@ -49,7 +49,7 @@ test("lines come out in display order: engine, fuel, then options", () => {
 
 test("a price change in the data changes the total, with no code change", () => {
   const custom = structuredClone(data);
-  custom.engines.find((e) => e.id === "nw-m500").basePrice += 1000;
+  must(custom.engines.find((e) => e.id === "nw-m500")).basePrice += 1000;
   assert.equal(calculateTotals(custom, FULL_CONFIG).price, 173200);
 });
 

@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createState, selectionsToQuery, selectionsFromQuery } from "../js/state.js";
-import { getAllGroups } from "../js/rules.js";
-import { loadData, FULL_CONFIG } from "./helpers.js";
+import { createState, selectionsToQuery, selectionsFromQuery } from "../src/state.ts";
+import { getAllGroups } from "../src/rules.ts";
+import { loadData, FULL_CONFIG } from "./helpers.ts";
 
 const groups = getAllGroups(loadData());
 

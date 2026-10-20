@@ -7,34 +7,35 @@ import {
   validateStep,
   firstIncompleteStep,
   checkDataIntegrity,
-} from "../js/rules.js";
-import { loadData, FULL_CONFIG } from "./helpers.js";
+} from "../src/rules.ts";
+import { loadData, FULL_CONFIG, must, statusOf } from "./helpers.ts";
 
 const data = loadData();
 
 test("fuels not supported by the engine are disabled with a reason", () => {
-  const fuel = getAvailability(data, { engine: "nw-m250" }).fuel;
-  assert.equal(fuel.lng.available, false);
-  assert.match(fuel.lng.reason, /NW-M250/);
-  assert.equal(fuel.mdo.available, true);
-  assert.equal(fuel.methanol.available, true);
+  const availability = getAvailability(data, { engine: "nw-m250" });
+  const lng = statusOf(availability, "fuel", "lng");
+  assert.equal(lng.available, false);
+  assert.match(lng.reason, /NW-M250/);
+  assert.equal(statusOf(availability, "fuel", "mdo").available, true);
+  assert.equal(statusOf(availability, "fuel", "methanol").available, true);
 });
 
 test("'requires' rule: methanol disables every control system except advanced", () => {
-  const control = getAvailability(data, { fuel: "methanol" }).control;
-  assert.equal(control.basic.available, false);
-  assert.equal(control.advanced.available, true);
+  const availability = getAvailability(data, { fuel: "methanol" });
+  assert.equal(statusOf(availability, "control", "basic").available, false);
+  assert.equal(statusOf(availability, "control", "advanced").available, true);
 });
 
 test("'excludes' rule: SCR is not available with LNG", () => {
-  const after = getAvailability(data, { fuel: "lng" }).aftertreatment;
-  assert.equal(after.scr.available, false);
-  assert.equal(after.none.available, true);
+  const availability = getAvailability(data, { fuel: "lng" });
+  assert.equal(statusOf(availability, "aftertreatment", "scr").available, false);
+  assert.equal(statusOf(availability, "aftertreatment", "none").available, true);
 });
 
 test("'excludes' rule: the smallest engine cannot use the heat exchanger", () => {
-  const cooling = getAvailability(data, { engine: "nw-m250" }).cooling;
-  assert.equal(cooling["heat-exchanger"].available, false);
+  const availability = getAvailability(data, { engine: "nw-m250" });
+  assert.equal(statusOf(availability, "cooling", "heat-exchanger").available, false);
 });
 
 test("nothing is disabled when nothing is selected", () => {
@@ -62,7 +63,7 @@ test("a valid change resets nothing", () => {
 test("unknown ids (e.g. from an edited URL) are removed", () => {
   const { selections, resets } = sanitizeSelections(data, { engine: "nope", fuel: "mdo" });
   assert.deepEqual(selections, { fuel: "mdo" });
-  assert.equal(resets[0].group, "engine");
+  assert.equal(must(resets[0], "first reset").group, "engine");
 });
 
 test("a rule added only to the data works without code changes", () => {
@@ -74,9 +75,9 @@ test("a rule added only to the data works without code changes", () => {
     then: { group: "warranty", value: "5y" },
     message: "Test message",
   });
-  const warranty = getAvailability(custom, { engine: "nw-m1200" }).warranty;
-  assert.equal(warranty["2y"].available, false);
-  assert.equal(warranty["2y"].reason, "Test message");
+  const twoYear = statusOf(getAvailability(custom, { engine: "nw-m1200" }), "warranty", "2y");
+  assert.equal(twoYear.available, false);
+  assert.equal(twoYear.reason, "Test message");
 });
 
 test("validation reports missing choices per step", () => {
@@ -97,8 +98,11 @@ test("firstIncompleteStep finds where the user should continue", () => {
 
 test("checkDataIntegrity catches typos in rules", () => {
   const broken = structuredClone(data);
-  broken.rules[0].then.value = "advnced";
-  broken.rules[1].type = "forbids";
+  must(broken.rules[0]).then.value = "advnced";
+  // Deliberately invalid data. The type system forbids "forbids" (only
+  // "excludes" | "requires" are allowed), so we have to opt out explicitly:
+  // exactly the kind of mistake a typed codebase stops at compile time.
+  Object.assign(must(broken.rules[1]), { type: "forbids" });
   const problems = checkDataIntegrity(broken);
   assert.equal(problems.length, 2);
 });

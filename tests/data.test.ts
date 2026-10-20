@@ -2,8 +2,8 @@
 // so a bad edit (typo, impossible combination) fails before it ships.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkDataIntegrity, getAvailability } from "../js/rules.js";
-import { loadData } from "./helpers.js";
+import { checkDataIntegrity, getAvailability } from "../src/rules.ts";
+import { loadData, must } from "./helpers.ts";
 
 const data = loadData();
 
@@ -26,7 +26,7 @@ test("prices and weights are non-negative numbers", () => {
   for (const group of data.optionGroups) {
     for (const option of group.options) {
       assert.ok(Number.isFinite(option.price) && option.price >= 0, option.id);
-      if ("weightKg" in option) assert.ok(option.weightKg >= 0, option.id);
+      if (option.weightKg !== undefined) assert.ok(option.weightKg >= 0, option.id);
     }
   }
 });
@@ -39,7 +39,7 @@ test("every allowed engine + fuel combination can be completed", () => {
     for (const fuelId of engine.supportedFuels) {
       const availability = getAvailability(data, { engine: engine.id, fuel: fuelId });
       for (const group of data.optionGroups.filter((g) => g.required)) {
-        const anyLeft = Object.values(availability[group.id]).some((s) => s.available);
+        const anyLeft = Object.values(must(availability[group.id], group.id)).some((s) => s.available);
         assert.ok(anyLeft, `${engine.id} + ${fuelId} leaves no option in "${group.id}"`);
       }
     }
