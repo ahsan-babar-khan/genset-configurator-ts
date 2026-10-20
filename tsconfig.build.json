@@ -1,0 +1,14 @@
+// Compiles src/*.ts to dist/*.js for the browser (`npm run build`).
+// Same rules as tsconfig.json, but only the app code, and it emits files.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "allowImportingTsExtensions": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": [],
+    "sourceMap": true
+  },
+  "include": ["src"]
+}

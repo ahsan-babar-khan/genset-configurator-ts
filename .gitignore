@@ -16,3 +16,6 @@ npm-debug.log*
 *.log
 *.tmp
 genset-quote-*.json
+
+# TypeScript build output (created by npm run build)
+dist/

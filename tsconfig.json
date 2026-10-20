@@ -1,0 +1,35 @@
+// Type-checking config for the whole project (src + tests).
+// Used by the editor and by `npm run typecheck`. It never writes files;
+// tsconfig.build.json does the actual compiling for the browser.
+{
+  "compilerOptions": {
+    // Output language and module format the browser will run
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+
+    // Strictness: catch as much as possible at compile time
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    // Imports are written with .ts extensions, so Node can run the source
+    // files directly in tests; the build rewrites them to .js for the browser.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+
+    // Only use TypeScript syntax that can simply be erased (no enums or
+    // namespaces), which is what Node's built-in type stripping supports.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src", "tests"]
+}

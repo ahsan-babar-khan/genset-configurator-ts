@@ -1,13 +1,21 @@
 {
-  "name": "genset-configurator",
+  "name": "genset-configurator-ts",
   "version": "1.0.0",
-  "description": "Marine generator set configurator in plain HTML, CSS and JavaScript.",
+  "description": "Marine generator set configurator in TypeScript, HTML and CSS.",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test \"tests/*.test.ts\"",
+    "check": "npm run typecheck && npm test && npm run build"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
   }
 }
